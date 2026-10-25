@@ -316,9 +316,17 @@ end
 -- Session management
 local SAVE_PATH = os.getenv("HOME") .. "/.local/state/yazi/session.json"
 
-local save_session = ya.sync(function(state)
+local save_session = ya.sync(function(state, kind)
     if not cx or not cx.tabs then
         return false
+    end
+
+    if kind == "hover" then
+        local now = ya.time()
+        if state.t and now - state.t < 0.5 then
+            return false
+        end
+        state.t = now
     end
 
     local tabs = cx.tabs
@@ -328,10 +336,18 @@ local save_session = ya.sync(function(state)
     }
 
     for index, tab in ipairs(tabs) do
+        local h = tab.current.hovered
         session_data.tabs[#session_data.tabs + 1] = {
             idx = index,
             cwd = tostring(tab.current.cwd):gsub("\\", "/"),
+            hovered = h and (tostring(h.url):gsub("\\", "/")),
         }
+    end
+
+    local data = json.encode(session_data)
+
+    if state.last == data then
+        return true
     end
 
     local f = io.open(SAVE_PATH, "w")
@@ -339,8 +355,9 @@ local save_session = ya.sync(function(state)
         return false
     end
 
-    f:write(json.encode(session_data))
+    f:write(data)
     f:close()
+    state.last = data
     return true
 end)
 
@@ -371,6 +388,9 @@ local load_session = ya.sync(function(state)
 
     for _, tab in pairs(sorted_tabs) do
         ya.emit("tab_create", { tab.cwd })
+        if tab.hovered then
+            ya.emit("reveal", { tab.hovered })
+        end
     end
 
     ya.emit("tab_close", { 0 })
@@ -381,6 +401,16 @@ end)
 
 return {
     setup = function(_, opts)
+        for _, kind in ipairs({ "cd", "tab", "hover" }) do
+            ps.sub(kind, function()
+                save_session(kind)
+            end)
+        end
+
+        if #rt.args.entries > 0 then
+            return
+        end
+
         load_session()
     end,
 
